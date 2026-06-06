@@ -1,145 +1,256 @@
-# News Summarizer using Retrieval-Augmented Generation (RAG)
+# News Summarizer
 
-An interactive IR + NLP–based system that retrieves the most relevant news articles, ranks them using a hybrid unigram–bigram IR model, and generates concise, factual summaries using Retrieval-Augmented Generation.
-The system also supports follow-up question answering, top-headline extraction, trivia games, and fake-vs-real news detection.
+A Streamlit-based news intelligence app that builds a MongoDB news corpus, retrieves relevant articles with a custom IR pipeline, and uses Gemini for grounded summaries, follow-up QA, trivia generation, and fake-vs-real headline games.
 
-## Features
+## Tech Stack
 
-### Query-Based Search
-- Accepts user queries.
-- Retrieves top-matching news articles from a custom corpus.
-- Uses hybrid unigram + bigram IR scoring.
-- Dynamic pruning removes irrelevant documents.
+- Python 3.11+
+- Streamlit frontend
+- MongoDB document store
+- Custom LNC / TF-IDF retrieval in `search.py`
+- spaCy preprocessing with fallback tokenizer
+- Gemini API through `google-genai`
+- Trafilatura, Feedparser, GDELT/RSS ingestion
 
-### RAG-Based Summarization
-- Summaries are generated *only from retrieved evidence*.
-- Grounded prompting ensures no hallucinations.
-- Produces short, factual, query-focused summaries.
+## Repository Layout
 
-### Follow-Up Question Answering
-- Extracts relevant sentences using TF-IDF + cosine similarity.
-- Responds with short factual answers derived from matched evidence.
+```text
+.
++-- frontend/
+|   +-- app.py                    # Streamlit landing page
+|   +-- pages/
+|       +-- summary.py            # Search, summary, follow-up QA
+|       +-- play_trivia.py        # Trivia UI
+|       +-- realorfake.py         # Fake-vs-real news game UI
++-- generate_data.py              # Builds final_dataset corpus
++-- preprocess_new.py             # Tokenization, lemmatization, vector storage
++-- search.py                     # Hybrid retrieval/ranking engine
++-- summarizer.py                 # Gemini-backed summary and follow-up QA
++-- generate_trivia_ques.py       # Generates trivia_<category> collections
++-- backfill_categories.py        # Infers category for existing DB rows
++-- gemini_client.py              # Gemini client, retries, model config
++-- requirements.txt
+```
 
-### Headlines Retrieval
-- Fetches top headlines from an API.
-- Displays title, URL, and instant summary.
+## Environment Variables
 
-### Trivia Game
-- Extracts important sentences per article.
-- Generates MCQs and fill-in-the-blanks using Gemini API.
-- Helps users learn and retain news information.
+Copy the sample env file and fill in your values:
 
-### Fake vs Real News Module
-- Generates fake variations of real headlines.
-- Users must identify the authentic one.
-- Designed to improve media literacy.
+```powershell
+copy .env.example .env
+```
 
+Required:
 
----
+```env
+MONGO_URI=mongodb://localhost:27017/
+MONGO_DB=news_summarizer
+GEMINI_API_KEY=your_gemini_api_key
+```
 
-## Module Overview
+Optional:
 
-### 1. Dataset Building
-- Scrapes news articles from verified Indian sources.
-- Uses GDELT API + Trafilatura.
-- Builds a corpus for a chosen time period.
+```env
+GEMINI_MODEL=gemini-2.5-flash
+GEMINI_FALLBACK_MODEL=gemini-2.0-flash
+GROQ_API_KEY=your_groq_api_key
+```
 
-### 2. Document Preprocessing
-- Removes metadata, URLs, timezones, punctuation, etc.
-- Lemmatization and stopword removal using spaCy.
-- Title-level bigram extraction.
-- LNC vector formation for content:
-  
-  ```
-  LNC(t) = 1 + log(tf_t)
-  ```
+`GEMINI_FALLBACK_MODEL` is useful when Gemini returns temporary `503 UNAVAILABLE` high-demand errors.
 
- 
-### 3. Hybrid Search & Ranking Engine
+## Setup
 
-#### Query Processing
-- Cleaned and tokenized queries.
-- Synonym expansion:
-  - ai → artificial intelligence  
-  - us → united states  
-  - pm → prime minister  
+Create and activate a virtual environment:
 
-#### Relevance Scoring
+```powershell
+python -m venv .venv
+.\.venv\Scripts\activate
+```
 
-  ```
-  Relevance = α * content_score + (1 − α) * bigram_score
-  ```
+Install dependencies:
 
+```powershell
+pip install -r requirements.txt
+```
 
-Default weights:
-- Content score: **0.65**
-- Bigram score: **0.35**
+Make sure MongoDB is running locally or set `MONGO_URI` to your Atlas connection string.
 
-#### Dynamic Pruning
-- Removes documents with insufficient term overlap.
-- Gap-based cutoff removes documents with sudden score drop.
+## Run The App
 
----
+Start the Streamlit UI:
 
-##  Summarization & Follow-Up QA
+```powershell
+streamlit run frontend/app.py
+```
 
-### Summarization (RAG)
-- Retrieves top-K documents.
-- Builds an “evidence block” from matched text.
-- Grounded prompting ensures summarization is factual.
+Open the local URL printed by Streamlit, usually:
 
-### Follow-Up Question Answering
-- Splits retrieved documents into sentences.
-- Builds TF-IDF vectors.
-- Selects top relevant sentences using cosine similarity.
-- Generates short factual answers using grounded prompting.
+```text
+http://localhost:8501
+```
 
----
+## Data Pipeline
 
-##  Experiments & Results
+### 1. Build Or Refresh The News Corpus
 
-The evaluation includes:
+```powershell
+python generate_data.py
+```
 
-1. **Relevant document retrieval**  
-2. **Generated query-focused summary**  
-3. **Follow-up QA responses**
+This collects Indian news from RSS/GDELT sources, scrapes article content, infers categories, and upserts documents into:
 
-Screenshots (search page, summary page, QA page) demonstrate:
-- Accurate IR retrieval  
-- Extractive, grounded summaries  
-- Reliable follow-up answers  
+```text
+final_dataset
+```
 
----
+### 2. Preprocess Documents For Search
 
-##  Conclusions
+```powershell
+python preprocess_new.py
+```
 
-- Bigram scoring at the headline level improves query precision.
-- The hybrid unigram–bigram approach outperforms unigram-only models.
-- RAG provides hallucination-free summarization.
-- The system is effective for fast, reliable, multi-source news summarization.
+This computes cleaned tokens, LNC vectors, and title bigram metadata used by `search.py`.
 
----
+### 3. Backfill Categories For Existing Data
 
-##  Limitations
+Run this if older documents have `category: null`:
 
-- Corpus limited to one month due to API constraints.
-- Free LLM APIs restrict number of requests/minute.
-- No real-time automated scraping pipeline.
-- Corpus generation is manual and local.
+```powershell
+python backfill_categories.py
+```
 
----
+It updates `final_dataset` and `raw_articles` with inferred categories such as:
 
-## Contributers
+```text
+business, sports, entertainment, technology, health, india, politics
+```
+
+### 4. Generate Trivia Collections
+
+```powershell
+python generate_trivia_ques.py
+```
+
+This reads from `raw_articles` if available; otherwise it falls back to `final_dataset`. It creates collections named:
+
+```text
+trivia_business
+trivia_sports
+trivia_entertainment
+trivia_technology
+trivia_health
+trivia_india
+trivia_politics
+```
+
+The script calls Gemini, so it may hit API quota or rate limits.
+
+## MongoDB Collections
+
+| Collection | Purpose |
+| --- | --- |
+| `final_dataset` | Main searchable article corpus |
+| `raw_articles` | Optional raw article source for trivia generation |
+| `trivia_<category>` | Generated trivia questions per category |
+| game/score collections | Used by fake-vs-real and CLI game scripts |
+
+## Core Search Flow
+
+1. User enters a query in Streamlit.
+2. `search.py` preprocesses the query.
+3. Hybrid ranking combines content vector score and title bigram score.
+4. Top documents are sent to `summarizer.py`.
+5. Gemini generates a grounded answer using only retrieved documents.
+6. Follow-up questions reuse cached documents and recent follow-up history.
+
+## Gemini Configuration
+
+The Gemini wrapper is in `gemini_client.py`.
+
+Supported env variables:
+
+```env
+GEMINI_API_KEY=...
+GEMINI_MODEL=gemini-2.5-flash
+GEMINI_FALLBACK_MODEL=gemini-2.0-flash
+```
+
+If you see quota errors:
+
+```text
+429 RESOURCE_EXHAUSTED
+```
+
+Use a key/project with available quota or wait for the quota reset.
+
+If you see temporary demand errors:
+
+```text
+503 UNAVAILABLE
+```
+
+The client retries automatically. You can also set `GEMINI_FALLBACK_MODEL`.
+
+## Common Commands
+
+```powershell
+# Run app
+streamlit run frontend/app.py
+
+# Build corpus
+python generate_data.py
+
+# Build search vectors
+python preprocess_new.py
+
+# Fix null categories
+python backfill_categories.py
+
+# Generate trivia
+python generate_trivia_ques.py
+
+# CLI search/summarizer test
+python summarizer.py
+```
+
+## Troubleshooting
+
+### `category` is null and trivia does not generate
+
+Run:
+
+```powershell
+python backfill_categories.py
+python generate_trivia_ques.py
+```
+
+### `Could not import summarizer.py` with Torch DLL error
+
+The preprocessing module now lazy-loads spaCy and falls back to a simple tokenizer. If the error persists, reinstall compatible `torch`, `spacy`, and `thinc` packages in a clean virtual environment.
+
+### Gemini quota exceeded
+
+The free tier can be small. Replace the key in `.env`, use a project with quota, or wait for reset:
+
+```env
+GEMINI_API_KEY=your_new_key
+```
+
+Restart Streamlit after changing `.env`.
+
+### MongoDB connection failure
+
+Check:
+
+```env
+MONGO_URI=mongodb://localhost:27017/
+MONGO_DB=news_summarizer
+```
+
+For Atlas, whitelist your IP and use the full Atlas URI.
+
+## Contributors
 
 - Manya Goel
 - Dhanya Girdhar
 - Raashi Sharma
-
-
-
-
-
-
-
-
-
