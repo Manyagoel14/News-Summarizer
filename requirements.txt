@@ -1,16 +1,26 @@
-flask
-flask-cors
-requests
-openai
-python-dotenv
-pymongo
-requests
-trafilatura
-google-generativeai
-scikit-learn
-rapidfuzz
-google-generativeai>=0.3.0
-scikit-learn>=1.3.0
-python-dotenv>=1.0.0
-numpy>=1.24.0
+# Web UI
+streamlit>=1.28.0
+
+# Database
 pymongo>=4.0.0
+
+# Environment
+python-dotenv>=1.0.0
+
+# HTTP & web scraping
+requests>=2.31.0
+feedparser>=6.0.0
+beautifulsoup4>=4.12.0
+trafilatura>=1.6.0
+lxml_html_clean>=0.4.0
+
+# NLP & ML
+spacy>=3.7.0
+en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
+google-genai>=1.0.0
+scikit-learn>=1.3.0
+numpy>=1.24.0
+ftfy>=6.1.0
+
+# Utilities
+tqdm>=4.66.0

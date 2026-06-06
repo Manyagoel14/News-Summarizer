@@ -16,7 +16,6 @@ from collections import Counter
 from pymongo import MongoClient
 import pymongo
 from dotenv import load_dotenv
-import spacy
 import ftfy
 from tqdm import tqdm
 
@@ -30,7 +29,26 @@ db = client[MONGO_DB]
 coll = db["final_dataset"]
 
 
-nlp = spacy.load("en_core_web_sm", disable=["ner", "parser"])
+nlp = None
+
+
+def get_nlp():
+    """Load spaCy lazily so import-time DLL issues do not break the app."""
+    global nlp
+    if nlp is not None:
+        return nlp
+
+    try:
+        import spacy
+        nlp = spacy.load("en_core_web_sm", disable=["ner", "parser"])
+    except Exception as e:
+        print(f"Warning: spaCy unavailable; using simple tokenizer fallback: {e}")
+        nlp = False
+    return nlp
+
+
+def simple_tokenize(text):
+    return re.findall(r"[a-z0-9_]+", text.lower())
 
 RE_URL = re.compile(r"http\S+", flags=re.IGNORECASE)
 RE_PCT = re.compile(r"(\d+(?:\.\d+)?)\s*%")
@@ -96,26 +114,39 @@ def preprocess_text_to_tokens(text: str, keep_numbers: bool = True,
             protected_text = protected_text.replace(phrase, placeholder)
             phrase_map[placeholder] = phrase
 
-    doc = nlp(protected_text)
     tokens = []
 
-    for token in doc:
-        lemma = token.lemma_.lower().strip()
+    nlp_model = get_nlp()
+    if not nlp_model:
+        for token in simple_tokenize(protected_text):
+            if token in phrase_map:
+                tokens.append(token)
+                continue
+            if not keep_numbers and not token.isalpha():
+                continue
+            if len(token) < min_lemma_len:
+                continue
+            tokens.append(token)
+    else:
+        doc = nlp_model(protected_text)
 
-        if not lemma:
-            continue
-        if lemma in phrase_map:
+        for token in doc:
+            lemma = token.lemma_.lower().strip()
+
+            if not lemma:
+                continue
+            if lemma in phrase_map:
+                tokens.append(lemma)
+                continue
+
+            if token.is_stop:
+                continue
+            if not keep_numbers and not token.is_alpha:
+                continue
+            if len(lemma) < min_lemma_len:
+                continue
+
             tokens.append(lemma)
-            continue
-
-        if token.is_stop:
-            continue
-        if not keep_numbers and not token.is_alpha:
-            continue
-        if len(lemma) < min_lemma_len:
-            continue
-
-        tokens.append(lemma)
 
     if include_bigrams and len(tokens) >= 2:
         bigrams = [f"{tokens[i]}_{tokens[i+1]}" for i in range(len(tokens) - 1)]

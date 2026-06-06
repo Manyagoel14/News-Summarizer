@@ -9,6 +9,7 @@ import json
 from datetime import datetime, timedelta
 import time
 import os
+import re
 import feedparser
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pymongo import MongoClient, UpdateOne
@@ -16,6 +17,94 @@ from urllib.parse import urlparse
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 load_dotenv()
+
+
+def get_past_month(reference_date=None):
+    """Return (year, month) for the calendar month before reference_date."""
+    reference_date = reference_date or datetime.utcnow()
+    first_of_current = datetime(reference_date.year, reference_date.month, 1)
+    last_of_previous = first_of_current - timedelta(days=1)
+    return last_of_previous.year, last_of_previous.month
+
+
+def month_date_range(year, month):
+    """Return inclusive start/end datetimes for a calendar month."""
+    start_date = datetime(year, month, 1)
+    if month == 12:
+        end_date = datetime(year + 1, 1, 1) - timedelta(days=1)
+    else:
+        end_date = datetime(year, month + 1, 1) - timedelta(days=1)
+    end_date = end_date.replace(hour=23, minute=59, second=59)
+    return start_date, end_date
+
+
+CATEGORY_ALIASES = {
+    "technology": {"technology", "tech", "gadgets", "science", "ai", "artificial intelligence", "startup", "cyber", "software", "app"},
+    "sports": {"sports", "sport", "cricket", "football", "tennis", "ipl", "match", "wicket", "goal", "team", "player"},
+    "entertainment": {"entertainment", "movies", "movie", "film", "films", "bollywood", "hollywood", "music", "actor", "actress", "ott"},
+    "business": {"business", "markets", "market", "economy", "finance", "stocks", "stock", "money", "bank", "rbi", "profit", "shares"},
+    "health": {"health", "wellness", "medical", "medicine", "fitness", "doctor", "hospital", "disease", "covid", "drug"},
+    "india": {"india", "national", "domestic", "delhi", "mumbai", "bengaluru", "state", "court", "police"},
+    "politics": {"politics", "political", "elections", "election", "government", "bjp", "congress", "minister", "cm", "pm", "party"},
+}
+
+
+DOMAIN_CATEGORY_HINTS = {
+    "economictimes": "business",
+    "financialexpress": "business",
+    "business-standard": "business",
+    "livemint": "business",
+    "espncricinfo": "sports",
+    "sports.ndtv": "sports",
+    "cricbuzz": "sports",
+    "bollywood": "entertainment",
+}
+
+
+def normalize_category(value):
+    if value is None:
+        return None
+    value = str(value).strip().lower()
+    if not value or value in {"none", "null", "nan", "uncategorized"}:
+        return None
+    value = re.sub(r"[^a-z0-9]+", " ", value).strip()
+    for canonical, aliases in CATEGORY_ALIASES.items():
+        if value == canonical or value in aliases:
+            return canonical
+        if any(alias in value.split() for alias in aliases):
+            return canonical
+    return None
+
+
+def infer_article_category(article):
+    category = normalize_category(article.get("category"))
+    if category:
+        return category
+
+    domain_url = " ".join(
+        str(article.get(field) or "").lower()
+        for field in ("domain_name", "url")
+    )
+    for hint, canonical in DOMAIN_CATEGORY_HINTS.items():
+        if hint in domain_url:
+            return canonical
+
+    title = str(article.get("title") or "").lower()
+    haystack = " ".join(
+        str(article.get(field) or "")
+        for field in ("title", "description", "domain_name", "url", "content")
+    ).lower()
+    keyword_scores = {
+        canonical: sum(
+            2 if alias in title else 1
+            for alias in aliases
+            if re.search(rf"\b{re.escape(alias)}\b", haystack)
+        )
+        for canonical, aliases in CATEGORY_ALIASES.items()
+    }
+    best_category, best_score = max(keyword_scores.items(), key=lambda item: item[1])
+    return best_category if best_score > 0 else "india"
+
 
 class IndiaCompleteCorpusBuilder:
     """
@@ -42,37 +131,40 @@ class IndiaCompleteCorpusBuilder:
         
         print(f"[MongoDB] Connected to {db_name}.raw_articles")
 
+    def build_past_month_corpus(self, output_dir="india_corpus", reference_date=None):
+        """Build corpus for the previous calendar month relative to reference_date."""
+        year, month = get_past_month(reference_date)
+        return self.build_monthly_corpus(year, month, output_dir)
+
     def build_monthly_corpus(self, year, month, output_dir="india_corpus"):
+
+        start_date, end_date = month_date_range(year, month)
 
         print("=" * 70)
         print(f"Building Complete Indian News Corpus: {year}-{month:02d}")
+        print(f"Date range: {start_date.date()} to {end_date.date()}")
         print("=" * 70 + "\n")
 
         all_articles = []
 
         print("STEP 1: Collecting from RSS Feeds...")
         print("-" * 70)
-        rss_articles = self._collect_all_rss()
+        rss_articles = self._collect_all_rss(start_date, end_date)
         all_articles.extend(rss_articles)
-        print(f"[OK] RSS Collection: {len(rss_articles)} articles\n")
+        print(f"[OK] RSS Collection: {len(rss_articles)} articles in range\n")
 
         print("STEP 2: Collecting from GDELT (Historical)...")
         print("-" * 70)
-
-        start_date = datetime(year, month, 1)
-        if month == 12:
-            end_date = datetime(year + 1, 1, 1) - timedelta(days=1)
-        else:
-            end_date = datetime(year, month, 1) + timedelta(days=16)
 
         gdelt_articles = self._collect_gdelt_month(start_date, end_date)
         all_articles.extend(gdelt_articles)
         print(f"[OK] GDELT Collection: {len(gdelt_articles)} articles\n")
 
-        print("STEP 3: Deduplicating articles...")
+        print("STEP 3: Deduplicating and filtering by date...")
         print("-" * 70)
         unique_articles = self._deduplicate(all_articles)
-        print(f"[OK] Unique articles: {len(unique_articles)}\n")
+        unique_articles = self._filter_by_date_range(unique_articles, start_date, end_date)
+        print(f"[OK] Unique articles in range: {len(unique_articles)}\n")
 
         print("STEP 4: Scraping content from articles...")
         print("-" * 70)
@@ -99,8 +191,24 @@ class IndiaCompleteCorpusBuilder:
 
         return articles_with_content
 
-    def _collect_all_rss(self):
-        """Collect from all Indian RSS feeds."""
+    def _normalize_datetime(self, dt):
+        if dt is None:
+            return None
+        if getattr(dt, "tzinfo", None) is not None:
+            return dt.replace(tzinfo=None)
+        return dt
+
+    def _filter_by_date_range(self, articles, start_date, end_date):
+        filtered = []
+        for article in articles:
+            published = self._normalize_datetime(article.get("published"))
+            if published and start_date <= published <= end_date:
+                article["published"] = published
+                filtered.append(article)
+        return filtered
+
+    def _collect_all_rss(self, start_date=None, end_date=None):
+        """Collect from all Indian RSS feeds, optionally limited to a date range."""
 
         feeds = {
             'https://timesofindia.indiatimes.com/rssfeedstopstories.cms',
@@ -143,12 +251,20 @@ class IndiaCompleteCorpusBuilder:
                     if hasattr(entry, 'tags') and entry.tags:
                         category = entry.tags[0].get('term', None)
                     
+                    published = self._normalize_datetime(
+                        self._parse_date(entry.get('published', entry.get('updated', '')))
+                    )
+
+                    if start_date and end_date:
+                        if not published or published < start_date or published > end_date:
+                            continue
+
                     article = {
                         'title': entry.get('title', 'N/A'),
                         'url': url,
                         'domain_name': domain,
-                        'published': self._parse_date(entry.get('published', entry.get('updated', ''))),
-                        'content': '',  
+                        'published': published,
+                        'content': '',
                         'lang': 'en',
                         'country': 'IN',
                         'category': category,
@@ -335,6 +451,7 @@ class IndiaCompleteCorpusBuilder:
         
         operations = []
         for article in articles:
+            category = infer_article_category(article)
             doc = {
                 'title': article.get('title'),
                 'url': article.get('url'),
@@ -343,7 +460,9 @@ class IndiaCompleteCorpusBuilder:
                 'content': article.get('content', ''),
                 'lang': article.get('lang', 'en'),
                 'country': article.get('country', 'IN'),
-                'category': article.get('category'),
+                'category': category,
+                'source_category': article.get('category'),
+                'category_source': 'source' if normalize_category(article.get('category')) else 'inferred',
                 'collection_method': article.get('collection_method'),
                 'description': article.get('description', ''),
                 'scraped_at': article.get('scraped_at'),
@@ -459,5 +578,4 @@ if __name__ == "__main__":
         db_name=os.getenv("MONGO_DB")
     )
     
-    #getting the corpus for November 2025 (for testing)
-    builder.build_monthly_corpus(2025, 11, "india_corpus")
+    builder.build_past_month_corpus("india_corpus")

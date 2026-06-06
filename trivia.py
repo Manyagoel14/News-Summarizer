@@ -7,13 +7,9 @@ import time
 from pymongo import MongoClient
 from dotenv import load_dotenv
 from sklearn.feature_extraction.text import TfidfVectorizer
-import google.generativeai as genai
-from google.generativeai import GenerativeModel
 import random
 
 load_dotenv()
-gem_key = os.getenv("GEMINI_KEY")
-genai.configure(api_key=gem_key)
 
 sys.stdout.reconfigure(encoding='utf-8')
 
