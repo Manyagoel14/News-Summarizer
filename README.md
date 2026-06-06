@@ -8,7 +8,6 @@ A Streamlit-based news intelligence app that builds a MongoDB news corpus, retri
 - Streamlit frontend
 - MongoDB document store
 - Custom LNC / TF-IDF retrieval in `search.py`
-- spaCy preprocessing with fallback tokenizer
 - Gemini API through `google-genai`
 - Trafilatura, Feedparser, GDELT/RSS ingestion
 
@@ -59,13 +58,6 @@ GROQ_API_KEY=your_groq_api_key
 `GEMINI_FALLBACK_MODEL` is useful when Gemini returns temporary `503 UNAVAILABLE` high-demand errors.
 
 ## Setup
-
-Create and activate a virtual environment:
-
-```powershell
-python -m venv .venv
-.\.venv\Scripts\activate
-```
 
 Install dependencies:
 
@@ -150,7 +142,6 @@ The script calls Gemini, so it may hit API quota or rate limits.
 | Collection | Purpose |
 | --- | --- |
 | `final_dataset` | Main searchable article corpus |
-| `raw_articles` | Optional raw article source for trivia generation |
 | `trivia_<category>` | Generated trivia questions per category |
 | game/score collections | Used by fake-vs-real and CLI game scripts |
 
@@ -175,22 +166,6 @@ GEMINI_MODEL=gemini-2.5-flash
 GEMINI_FALLBACK_MODEL=gemini-2.0-flash
 ```
 
-If you see quota errors:
-
-```text
-429 RESOURCE_EXHAUSTED
-```
-
-Use a key/project with available quota or wait for the quota reset.
-
-If you see temporary demand errors:
-
-```text
-503 UNAVAILABLE
-```
-
-The client retries automatically. You can also set `GEMINI_FALLBACK_MODEL`.
-
 ## Common Commands
 
 ```powershell
@@ -212,45 +187,3 @@ python generate_trivia_ques.py
 # CLI search/summarizer test
 python summarizer.py
 ```
-
-## Troubleshooting
-
-### `category` is null and trivia does not generate
-
-Run:
-
-```powershell
-python backfill_categories.py
-python generate_trivia_ques.py
-```
-
-### `Could not import summarizer.py` with Torch DLL error
-
-The preprocessing module now lazy-loads spaCy and falls back to a simple tokenizer. If the error persists, reinstall compatible `torch`, `spacy`, and `thinc` packages in a clean virtual environment.
-
-### Gemini quota exceeded
-
-The free tier can be small. Replace the key in `.env`, use a project with quota, or wait for reset:
-
-```env
-GEMINI_API_KEY=your_new_key
-```
-
-Restart Streamlit after changing `.env`.
-
-### MongoDB connection failure
-
-Check:
-
-```env
-MONGO_URI=mongodb://localhost:27017/
-MONGO_DB=news_summarizer
-```
-
-For Atlas, whitelist your IP and use the full Atlas URI.
-
-## Contributors
-
-- Manya Goel
-- Dhanya Girdhar
-- Raashi Sharma
